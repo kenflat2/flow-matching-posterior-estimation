@@ -8,6 +8,7 @@ import math
 import matplotlib.pyplot as plt
 import sbibm.tasks
 from sbibm.metrics import c2st, median_distance, posterior_variance_ratio, posterior_mean_error, mmd, ksd
+from wasserstein import wasserstein
 import torch
 import numpy as np
 import pandas as pd
@@ -72,13 +73,15 @@ def complete_model_evaluation(train_dir, settings, dataset, model, metrics, use_
     task = sbibm.get_task(settings["task"]["name"])
     max_batch_size = settings["task"].get("max_batch_size", 500)
     metrics_dict = {'c2st': c2st, 'ksd': ksd, 'mmd': mmd, 'posterior_mean_error': posterior_mean_error,
-                     'posterior_variance_ratio': posterior_variance_ratio, 'median_distance': median_distance}
+                     'posterior_variance_ratio': posterior_variance_ratio, 'median_distance': median_distance,
+                     'wasserstein': wasserstein}
     metrics = [m for m in metrics if m in metrics_dict.keys()]
     result_list = []
 
     # for obs in range(1, 10):
     obs = 1
     
+    print("Generating reference samples...")
     reference_samples = task.get_reference_posterior_samples(num_observation=obs)
     num_samples = len(reference_samples)
     reference_samples_standardized = dataset.standardize(
@@ -99,6 +102,7 @@ def complete_model_evaluation(train_dir, settings, dataset, model, metrics, use_
     # generate (num_samples * 2), to account for samples outside of the prior
     posterior_samples, posterior_log_probs = [], []
 
+    print("Generating posterior samples...")
     for i in range(2 * num_samples // max_batch_size + 1):
         posterior_samples_batch, posterior_log_probs_batch = model.sample_and_log_prob_batch(
             observation.repeat((max_batch_size, 1))
@@ -128,11 +132,15 @@ def complete_model_evaluation(train_dir, settings, dataset, model, metrics, use_
     reference_samples = reference_samples[:n].detach()
     reference_log_probs = reference_log_probs[:n].detach()
 
+    """    # Uncomment this to plot the log probs and posteriors
     if obs == 1:
         plot_posteriors_and_log_probs(reference_samples, posterior_samples, reference_log_probs,
                                       posterior_log_probs, train_dir, 
                                       task_name=settings["task"]["name"],
                                       model_type=settings["model"]["type"])
+    """
+
+    print("Computing metrics...")
     result = {'num_observation': obs}
     for m in metrics:
         if m == 'ksd':
@@ -178,7 +186,7 @@ def compute_validation_loss(model, test_loader, train_dir):
 
 
 if __name__ == "__main__":
-    metrics = ['c2st', 'ksd', 'mmd', 'posterior_mean_error', 'posterior_variance_ratio', 'median_distance']
+    metrics = ['c2st', 'wasserstein'] #  'ksd', 'mmd', 'posterior_mean_error', 'posterior_variance_ratio', 'median_distance']
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--train_dir", required=True, help="Base save directory for the evaluation"
@@ -219,4 +227,5 @@ if __name__ == "__main__":
         device=settings["training"].get("device", "cpu"),
     )
 
-    complete_model_evaluation(args.train_dir, settings, dataset, model, args.metrics, use_wandb=use_wandb)
+    print("Running complete model evaluation...")
+    complete_model_evaluation(args.train_dir, settings, dataset, model, args.metrics, use_wandb=use_wandb, save_samples=False)

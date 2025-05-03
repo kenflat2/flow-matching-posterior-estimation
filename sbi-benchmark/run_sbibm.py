@@ -131,7 +131,7 @@ def evaluate_model(train_dir, settings, dataset, model, use_wandb=False):
     task = sbibm.get_task(settings["task"]["name"])
 
     c2st_scores = {}
-    for obs in range(1, 11):
+    for obs in range(1, 2): # 11): # Made it so we only check the first observation
         reference_samples = task.get_reference_posterior_samples(num_observation=obs)
         num_samples = len(reference_samples)
         observation = dataset.standardize(

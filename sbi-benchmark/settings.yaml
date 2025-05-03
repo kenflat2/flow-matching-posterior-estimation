@@ -37,12 +37,12 @@ model:
     type: DenseResidualNet
   type: flow_matching # normalizing_flow
 task:
-  name: two_moons
+  name: sir
   num_train_samples: 10000 # 100000
 training:
   batch_size: 64
   early_stopping: true
-  epochs: 5 # 100
+  epochs: 100
   num_workers: 0
   optimizer:
     lr: 0.0002
