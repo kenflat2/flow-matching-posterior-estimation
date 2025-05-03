@@ -1,4 +1,3 @@
-
 import argparse
 import csv
 import os.path
@@ -31,7 +30,9 @@ def plot_posteriors_and_log_probs(
         posterior_samples,
         reference_log_probs,
         posterior_log_probs,
-        train_dir
+        train_dir,
+        task_name="Unknown",
+        model_type="Unknown"
         ):
     plt.hist(
         posterior_log_probs,
@@ -43,6 +44,7 @@ def plot_posteriors_and_log_probs(
         alpha=0.2,
         label="reference log probs",
     )
+    plt.title(f"Task: {task_name} - Log Probability Comparison")
     plt.legend()
     plt.savefig(join(train_dir, "log_probs.png"))
     plt.clf()
@@ -52,7 +54,7 @@ def plot_posteriors_and_log_probs(
         posterior_samples[:, 1],
         s=0.5,
         alpha=0.2,
-        label="flow matching",
+        label=f"{model_type}",
     )
     plt.scatter(
         reference_samples[:, 0],
@@ -61,6 +63,7 @@ def plot_posteriors_and_log_probs(
         alpha=0.2,
         label="reference",
     )
+    plt.title(f"Task: {task_name} - Posterior Comparison")
     plt.legend()
     plt.savefig(join(train_dir, "posteriors.png"))
 
@@ -73,74 +76,78 @@ def complete_model_evaluation(train_dir, settings, dataset, model, metrics, use_
     metrics = [m for m in metrics if m in metrics_dict.keys()]
     result_list = []
 
-    for obs in range(1, 10):
-        reference_samples = task.get_reference_posterior_samples(num_observation=obs)
-        num_samples = len(reference_samples)
-        reference_samples_standardized = dataset.standardize(
-            reference_samples, label="theta"
+    # for obs in range(1, 10):
+    obs = 1
+    
+    reference_samples = task.get_reference_posterior_samples(num_observation=obs)
+    num_samples = len(reference_samples)
+    reference_samples_standardized = dataset.standardize(
+        reference_samples, label="theta"
+    )
+
+    observation = dataset.standardize(
+        task.get_observation(num_observation=obs), label="x"
+    )
+    reference_log_probs = []
+    for i in range(math.ceil(num_samples / max_batch_size)):
+        reference_batch = reference_samples_standardized[(i*max_batch_size):((i+1)*max_batch_size)]
+        # We evaluate likelihoods of the standardized data
+        reference_log_probs.append(model.log_prob_batch(
+                reference_batch, observation.repeat((len(reference_batch), 1))
+        ).detach())
+    reference_log_probs = torch.cat(reference_log_probs, dim=0)
+    # generate (num_samples * 2), to account for samples outside of the prior
+    posterior_samples, posterior_log_probs = [], []
+
+    for i in range(2 * num_samples // max_batch_size + 1):
+        posterior_samples_batch, posterior_log_probs_batch = model.sample_and_log_prob_batch(
+            observation.repeat((max_batch_size, 1))
         )
+        posterior_samples.append(posterior_samples_batch.detach())
+        posterior_log_probs.append(posterior_log_probs_batch.detach())
+    posterior_samples = torch.cat(posterior_samples, dim=0)
+    posterior_log_probs = torch.cat(posterior_log_probs, dim=0)
 
-        observation = dataset.standardize(
-            task.get_observation(num_observation=obs), label="x"
-        )
-        reference_log_probs = []
-        for i in range(math.ceil(num_samples / max_batch_size)):
-            reference_batch = reference_samples_standardized[(i*max_batch_size):((i+1)*max_batch_size)]
-            # We evaluate likelihoods of the standardized data
-            reference_log_probs.append(model.log_prob_batch(
-                    reference_batch, observation.repeat((len(reference_batch), 1))
-            ).detach())
-        reference_log_probs = torch.cat(reference_log_probs, dim=0)
-        # generate (num_samples * 2), to account for samples outside of the prior
-        posterior_samples, posterior_log_probs = [], []
+    posterior_samples = dataset.standardize(
+        posterior_samples, label="theta", inverse=True
+    )
 
-        for i in range(2 * num_samples // max_batch_size + 1):
-            posterior_samples_batch, posterior_log_probs_batch = model.sample_and_log_prob_batch(
-                observation.repeat((max_batch_size, 1))
-            )
-            posterior_samples.append(posterior_samples_batch.detach())
-            posterior_log_probs.append(posterior_log_probs_batch.detach())
-        posterior_samples = torch.cat(posterior_samples, dim=0)
-        posterior_log_probs = torch.cat(posterior_log_probs, dim=0)
+    # discard samples outside the prior
+    prior_mask = torch.isfinite(task.prior_dist.log_prob(posterior_samples))
+    print(
+        f"{(1 - torch.sum(prior_mask) / len(prior_mask)) * 100:.2f}% of the samples "
+        f"lie outside of the prior. Discarding these."
+    )
+    posterior_samples = posterior_samples[prior_mask]
+    posterior_log_probs = posterior_log_probs[prior_mask]
+    n = min(len(reference_samples), len(posterior_samples))
+    if len(reference_samples) > len(posterior_samples):
+        print('Less posterior samples than reference samples!')
+    posterior_samples = posterior_samples[:n].detach()
+    posterior_log_probs = posterior_log_probs[:n].detach()
+    reference_samples = reference_samples[:n].detach()
+    reference_log_probs = reference_log_probs[:n].detach()
 
-        posterior_samples = dataset.standardize(
-            posterior_samples, label="theta", inverse=True
-        )
+    if obs == 1:
+        plot_posteriors_and_log_probs(reference_samples, posterior_samples, reference_log_probs,
+                                      posterior_log_probs, train_dir, 
+                                      task_name=settings["task"]["name"],
+                                      model_type=settings["model"]["type"])
+    result = {'num_observation': obs}
+    for m in metrics:
+        if m == 'ksd':
+            score = ksd(task, obs, posterior_samples)
+        else:
+            score = metrics_dict[m](posterior_samples, reference_samples).item()
+        result[m] = score
+    result_list.append(result)
 
-        # discard samples outside the prior
-        prior_mask = torch.isfinite(task.prior_dist.log_prob(posterior_samples))
-        print(
-            f"{(1 - torch.sum(prior_mask) / len(prior_mask)) * 100:.2f}% of the samples "
-            f"lie outside of the prior. Discarding these."
-        )
-        posterior_samples = posterior_samples[prior_mask]
-        posterior_log_probs = posterior_log_probs[prior_mask]
-        n = min(len(reference_samples), len(posterior_samples))
-        if len(reference_samples) > len(posterior_samples):
-            print('Less posterior samples than reference samples!')
-        posterior_samples = posterior_samples[:n].detach()
-        posterior_log_probs = posterior_log_probs[:n].detach()
-        reference_samples = reference_samples[:n].detach()
-        reference_log_probs = reference_log_probs[:n].detach()
-
-        if obs == 1:
-            plot_posteriors_and_log_probs(reference_samples, posterior_samples, reference_log_probs,
-                                          posterior_log_probs, train_dir)
-        result = {'num_observation': obs}
-        for m in metrics:
-            if m == 'ksd':
-                score = ksd(task, obs, posterior_samples)
-            else:
-                score = metrics_dict[m](posterior_samples, reference_samples).item()
-            result[m] = score
-        result_list.append(result)
-
-        if save_samples:
-            dir_obs = join(train_dir, str(obs).zfill(2))
-            Path(dir_obs).mkdir(exist_ok=True)
-            np.save(join(dir_obs, 'samples.npy'), posterior_samples)
-            np.save(join(dir_obs, 'posterior_log_probs.npy'), posterior_log_probs)
-            np.save(join(dir_obs, 'reference_log_probs.npy'), reference_log_probs)
+    if save_samples:
+        dir_obs = join(train_dir, str(obs).zfill(2))
+        Path(dir_obs).mkdir(exist_ok=True)
+        np.save(join(dir_obs, 'samples.npy'), posterior_samples)
+        np.save(join(dir_obs, 'posterior_log_probs.npy'), posterior_log_probs)
+        np.save(join(dir_obs, 'reference_log_probs.npy'), reference_log_probs)
 
     with open(
             join(train_dir, "results.csv"), "w"

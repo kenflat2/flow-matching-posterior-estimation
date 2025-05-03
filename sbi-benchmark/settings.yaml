@@ -1,4 +1,18 @@
 model:
+  # type: normalizing_flow
+  # posterior_kwargs:
+  #   input_dim: 2                   # For two_moons (2D data)
+  #   context_dim: 2                 # For two_moons (2D context)
+  #   num_flow_steps: 8              # Number of flow transformations
+  #   base_transform_kwargs:
+  #     hidden_dim: 256              # Hidden dimension size
+  #     num_transform_blocks: 4      # Number of transform blocks
+  #     activation: "relu"           # Activation function (relu, elu, etc.)
+  #     dropout_probability: 0.1     # Dropout rate
+  #     batch_norm: true             # Use batch normalization
+  #     num_bins: 10                 # Number of bins for spline
+  #     tail_bound: 3.0              # Tail bound
+  #     base_transform_type: "rq-coupling"  # Use rational-quadratic coupling transforms
   posterior_kwargs:
     activation: gelu
     batch_norm: false
@@ -21,14 +35,14 @@ model:
     theta_with_glu: false
     time_prior_exponent: 4
     type: DenseResidualNet
-  type: flow_matching
+  type: flow_matching # normalizing_flow
 task:
   name: two_moons
-  num_train_samples: 100000
+  num_train_samples: 10000 # 100000
 training:
   batch_size: 64
   early_stopping: true
-  epochs: 100
+  epochs: 5 # 100
   num_workers: 0
   optimizer:
     lr: 0.0002
